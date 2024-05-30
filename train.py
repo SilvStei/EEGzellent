@@ -8,6 +8,7 @@ import mne
 from scipy import signal as sig
 import ruptures as rpt
 import json
+import scikit-learn as sklearn
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, VotingClassifier
 from sklearn.metrics import f1_score, mean_absolute_error
