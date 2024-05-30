@@ -17,7 +17,7 @@ from joblib import Parallel, delayed  # Joblib zur Parallelisierung
 from bayes_opt import BayesianOptimization
 
 # Setze das Trainingsdatenverzeichnis
-training_folder = "/home/jupyter-wki_team_2/Silvan/training/training"
+training_folder = "."
 
 # Funktion zur Berechnung von Features
 def calculate_features(signal, fs):
