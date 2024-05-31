@@ -173,7 +173,6 @@ toml @ file:///home/conda/feedstock_root/build_artifacts/toml_1604308577558/work
 tomli==1.2.3
 tornado @ file:///home/conda/feedstock_root/build_artifacts/tornado_1648827245914/work
 tqdm @ file:///home/conda/feedstock_root/build_artifacts/tqdm_1649051611147/work
-traitlets @ file:///home/conda/feedstock_root/build_artifacts/traitlets_1635260543454/work
 typing_extensions @ file:///home/conda/feedstock_root/build_artifacts/typing_extensions_1650370875435/work
 ujson @ file:///home/conda/feedstock_root/build_artifacts/ujson_1649354748695/work
 urllib3 @ file:///home/conda/feedstock_root/build_artifacts/urllib3_1647489083693/work
