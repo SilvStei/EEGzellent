@@ -29,7 +29,7 @@ def predict_labels(channels: List[str], data: np.ndarray, fs: float, reference_s
     if model_name == 'model.json':
         model_name = 'model.joblib'  # Setze auf den korrekten Modellnamen um, wenn model.json übergeben wird
     
-    model_path = os.path.join('.', model_name)
+    model_path = os.path.join('./', model_name)
     try:
         clf = load(model_path)
         print(f"Model loaded from {model_path}")
@@ -37,7 +37,7 @@ def predict_labels(channels: List[str], data: np.ndarray, fs: float, reference_s
         print(f"Error loading model from {model_path}: {e}")
         return {}
 
-    scaler_path = os.path.join('.', 'scaler.pkl')
+    scaler_path = os.path.join('./', 'scaler.pkl')
     try:
         scaler = load(scaler_path)
         print(f"Scaler loaded from {scaler_path}")
