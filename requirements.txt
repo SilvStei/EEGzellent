@@ -152,8 +152,8 @@ ruamel-yaml-conda @ file:///home/conda/feedstock_root/build_artifacts/ruamel_yam
 ruamel.yaml==0.17.20
 ruamel.yaml.clib==0.2.6
 ruptures==1.1.7
-scikit-learn==1.0.2
-scipy==1.10.1
+scikit-learn
+scipy
 seaborn==0.11.2
 Send2Trash @ file:///home/conda/feedstock_root/build_artifacts/send2trash_1628511208346/work
 six @ file:///home/conda/feedstock_root/build_artifacts/six_1620240208055/work
