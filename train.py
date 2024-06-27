@@ -166,7 +166,7 @@ def knn_cv(n_neighbors, weights, algorithm):
     return np.mean(f1_scores)
 
 # Laden der Trainingsdaten
-data_folder = '/home/jupyter-wki_team_2/Silvan/training/training'
+data_folder = ''
 batch_size = 1000  # Erhöhte Anzahl der Samples pro Batch
 
 # Überprüfen, ob alle Dateien geladen werden
