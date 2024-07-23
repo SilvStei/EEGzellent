@@ -3,8 +3,9 @@ import numpy as np
 import joblib
 from typing import List, Dict, Any
 import argparse
+from scipy.ndimage import uniform_filter1d
+from scipy.signal import find_peaks, welch
 from wettbewerb import EEGDataset
-from scipy.signal import welch
 
 # Laden des Modells und des Scalers
 # Basisverzeichnis ermitteln (Verzeichnis des aktuellen Skripts)
@@ -16,10 +17,69 @@ scaler_path = os.path.join(base_dir, 'scaler.joblib')
 model = joblib.load(model_path)
 scaler = joblib.load(scaler_path)
 
-# Funktion zum Berechnen der Signaländerungsrate
-def calculate_change_rate(data):
-    change_rate = np.sum(np.abs(np.diff(data)))
-    return change_rate
+# Funktion zum Berechnen der Hjorth-Parameter
+def hjorth_parameters(data):
+    first_deriv = np.diff(data)
+    second_deriv = np.diff(first_deriv)
+    var_zero = np.var(data)
+    var_d1 = np.var(first_deriv)
+    var_d2 = np.var(second_deriv)
+    
+    if var_zero == 0:
+        var_zero = 1e-10
+    if var_d1 == 0:
+        var_d1 = 1e-10
+    
+    mobility = np.sqrt(var_d1 / var_zero)
+    
+    if var_d2 == 0:
+        var_d2 = 1e-10
+    
+    complexity = np.sqrt(var_d2 / var_d1) / mobility
+    return mobility, complexity
+
+# Funktion zur Berechnung von Onset und Offset basierend auf Hjorth-Mobilität und Energie
+def calculate_onset_offset(data, fs):
+    window_size = fs
+    step_size = fs // 2  # Halb so große Schritte für feinere Analyse
+    hjorth_values = []
+    energy_values = []
+
+    for start in range(0, len(data[0]) - window_size + 1, step_size):
+        window = data[:, start:start + window_size]
+        mobility = np.mean([hjorth_parameters(channel)[0] for channel in window])
+        energy = np.sum(window ** 2)  # Berechnung der Energie des Fensters
+        hjorth_values.append(mobility)
+        energy_values.append(energy)
+
+    hjorth_values = np.array(hjorth_values)
+    energy_values = np.array(energy_values)
+    
+    # Glätten der Energiezeitreihe
+    smoothed_energy = uniform_filter1d(energy_values, size=5)
+
+    # Identifiziere die Changepoints der maximalen Energie
+    energy_diffs = np.diff(smoothed_energy)
+    peaks, _ = find_peaks(energy_diffs, height=np.max(energy_diffs) * 0.5)
+
+    if len(peaks) == 0:
+        peaks = [np.argmax(energy_diffs)]
+
+    changepoint_index = peaks[0]
+
+    # Bestimme das erste Fenster mit hoher Hjorth-Mobilität, das dem Changepoint am nächsten ist
+    high_mobility_indices = np.where(hjorth_values > np.percentile(hjorth_values, 95))[0]
+    
+    if len(high_mobility_indices) == 0:
+        return 0.0, data.shape[1] / fs
+
+    onset_index = high_mobility_indices[np.argmin(np.abs(high_mobility_indices - changepoint_index))]
+    offset_index = high_mobility_indices[-1]
+
+    onset = onset_index * step_size / fs
+    offset = (offset_index + window_size) * step_size / fs
+
+    return onset, offset
 
 # Funktion zum Berechnen der Bandpower
 def bandpower(data, sf, band, window_sec=4, relative=False):
@@ -35,11 +95,6 @@ def bandpower(data, sf, band, window_sec=4, relative=False):
         bp /= np.trapz(psd, freqs)
     return bp
 
-# Funktion zum Berechnen der Hjorth-Mobilität
-def hjorth_mobility(data):
-    diff_signal = np.diff(data)
-    return np.sqrt(np.var(diff_signal) / np.var(data))
-
 # Funktion zum Extrahieren von Features aus rohen EEG-Daten
 def extract_features(data, fs):
     features = []
@@ -47,7 +102,7 @@ def extract_features(data, fs):
         mean = np.mean(channel_data)
         std = np.std(channel_data)
         line_length = np.sum(np.abs(np.diff(channel_data)))
-        change_rate = calculate_change_rate(channel_data)
+        change_rate = np.sum(np.abs(np.diff(channel_data)))
         
         delta_power = bandpower(channel_data, fs, [0.5, 4])
         theta_power = bandpower(channel_data, fs, [4, 8])
@@ -55,36 +110,10 @@ def extract_features(data, fs):
         beta_power = bandpower(channel_data, fs, [13, 30])
         
         features.extend([mean, std, line_length, change_rate, delta_power, theta_power, alpha_power, beta_power])
-    
     max_feature_length = 152  # Ensure the same number of features as during training (19 channels * 8 features)
     if len(features) < max_feature_length:
         features = np.pad(features, (0, max_feature_length - len(features)), 'constant')
     return np.array(features)
-
-# Funktion zur Berechnung von Onset und Offset basierend auf Hjorth-Mobilität
-def calculate_onset_offset(data, fs):
-    window_size = fs
-    step_size = fs
-    hjorth_values = []
-
-    for start in range(0, len(data[0]) - window_size + 1, step_size):
-        window = data[:, start:start + window_size]
-        mobility = np.mean([hjorth_mobility(channel) for channel in window])
-        hjorth_values.append(mobility)
-
-    hjorth_values = np.array(hjorth_values)
-    high_mobility_indices = np.where(hjorth_values > np.percentile(hjorth_values, 95))[0]
-
-    if len(high_mobility_indices) == 0:
-        return 0.0, data.shape[1] / fs
-
-    onset_index = high_mobility_indices[0]
-    offset_index = high_mobility_indices[-1]
-
-    onset = onset_index * step_size / fs
-    offset = (offset_index + window_size) * step_size / fs
-
-    return onset, offset
 
 def predict_labels(channels: List[str], data: np.ndarray, fs: float, reference_system: str, model_name: str='model.json') -> Dict[str, Any]:
     try:
@@ -141,7 +170,7 @@ def main(test_dir: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Make predictions on EEG test data")
-    parser.addendant("--test_dir", type=str, required=True, help="Directory containing the test EEG data")
+    parser.add_argument("--test_dir", type=str, required=True, help="Directory containing the test EEG data")
     args = parser.parse_args()
     
     main(args.test_dir)

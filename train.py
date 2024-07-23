@@ -4,13 +4,15 @@ import joblib
 from sklearn.ensemble import RandomForestClassifier, VotingClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import f1_score
+from sklearn.metrics import f1_score, precision_score, recall_score, accuracy_score, log_loss
 from wettbewerb import EEGDataset
 from bayes_opt import BayesianOptimization
 from joblib import Parallel, delayed
 from sklearn.model_selection import StratifiedKFold, train_test_split
 import pandas as pd
 from scipy.signal import welch
+import psutil
+import time
 
 # Funktion zum Berechnen der Signaländerungsrate
 def calculate_change_rate(data):
@@ -136,9 +138,8 @@ def rf_cv(n_estimators, max_depth, min_samples_split, min_samples_leaf, bootstra
 
         clf.fit(X_train, Y_train)
         Y_pred = clf.predict(X_test)
-
-        f1 = f1_score(Y_test, Y_pred, average='weighted')  # Use weighted averaging for multiclass problems
-        f1_scores.append(f1)
+        
+        f1_scores.append(f1_score(Y_test, Y_pred, average='weighted'))
 
     return np.mean(f1_scores)
 
@@ -160,8 +161,7 @@ def knn_cv(n_neighbors, weights, algorithm):
         clf.fit(X_train, Y_train)
         Y_pred = clf.predict(X_test)
 
-        f1 = f1_score(Y_test, Y_pred, average='weighted')
-        f1_scores.append(f1)
+        f1_scores.append(f1_score(Y_test, Y_pred, average='weighted'))
 
     return np.mean(f1_scores)
 
@@ -174,6 +174,9 @@ all_files_loaded = verify_loaded_files(data_folder)
 if not all_files_loaded:
     print("Nicht alle Dateien wurden korrekt geladen!")
 else:
+    start_time = time.time()
+    process = psutil.Process(os.getpid())
+    
     features, labels = extract_all_features(data_folder, batch_size)
 
     # Sicherstellen, dass die Labels als Integers für Multiclass vorliegen
@@ -234,9 +237,53 @@ else:
     ensemble_model = VotingClassifier(estimators=[('rf', final_rf), ('knn', final_knn)], voting='soft', n_jobs=-1)
     ensemble_model.fit(features_train, labels_train)
 
+    # Performance auf dem Validierungsset evaluieren
+    val_predictions = ensemble_model.predict(features_val)
+    val_prob_predictions = ensemble_model.predict_proba(features_val)
+
+    val_f1_score = f1_score(labels_val, val_predictions, average='weighted')
+    val_precision = precision_score(labels_val, val_predictions, average='weighted')
+    val_recall = recall_score(labels_val, val_predictions, average='weighted')
+    val_accuracy = accuracy_score(labels_val, val_predictions)
+    val_loss = log_loss(labels_val, val_prob_predictions)
+
+    print(f"Validation F1 Score: {val_f1_score:.4f}")
+    print(f"Validation Precision: {val_precision:.4f}")
+    print(f"Validation Recall: {val_recall:.4f}")
+    print(f"Validation Accuracy: {val_accuracy:.4f}")
+    print(f"Validation Log Loss: {val_loss:.4f}")
+
+    # Feature Importance für RandomForestClassifier extrahieren und anzeigen
+    feature_importances = final_rf.feature_importances_
+    num_features_per_channel = 8  # Anzahl der Features pro Kanal
+    num_channels = len(feature_importances) // num_features_per_channel
+
+    average_importances = np.zeros(num_features_per_channel)
+    for i in range(num_channels):
+        start_idx = i * num_features_per_channel
+        end_idx = start_idx + num_features_per_channel
+        average_importances += feature_importances[start_idx:end_idx]
+    average_importances /= num_channels
+
+    # Normalisieren der Feature Importances
+    total_importance = np.sum(average_importances)
+    normalized_importances = average_importances / total_importance
+
+    feature_names = ['mean', 'std', 'line_length', 'change_rate', 'delta_power', 'theta_power', 'alpha_power', 'beta_power']
+    for i, importance in enumerate(normalized_importances):
+        print(f"Feature: {feature_names[i]}, Normalized Average Importance: {importance}")
+
     # Speichern des Ensemble-Modells und des Scalers
     model_path = os.path.join(os.path.dirname(__file__), 'ensemble_model.joblib')
     scaler_path = os.path.join(os.path.dirname(__file__), 'scaler.joblib')
     joblib.dump(ensemble_model, model_path)
     joblib.dump(scaler, scaler_path)
     print("Ensemble-Modell und Scaler gespeichert.")
+    
+    end_time = time.time()
+    memory_usage = process.memory_info().rss / (1024 ** 2)  # In MB
+    cpu_usage = psutil.cpu_percent(interval=None)
+    
+    print(f"RAM-Verbrauch: {memory_usage:.2f} MB")
+    print(f"CPU-Auslastung: {cpu_usage:.2f}%")
+    print(f"Laufzeit: {end_time - start_time:.2f} Sekunden")
