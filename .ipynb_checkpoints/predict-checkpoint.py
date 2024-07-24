@@ -5,6 +5,7 @@ from typing import List, Dict, Any
 import argparse
 from scipy.ndimage import uniform_filter1d
 from scipy.signal import find_peaks, welch
+from scipy.stats import entropy
 from wettbewerb import EEGDataset
 
 # Laden des Modells und des Scalers
@@ -95,6 +96,24 @@ def bandpower(data, sf, band, window_sec=4, relative=False):
         bp /= np.trapz(psd, freqs)
     return bp
 
+# Funktion zum Berechnen der Entropy
+def calculate_entropy(data):
+    data = np.asarray(data)
+    hist, bin_edges = np.histogram(data, bins=10, density=True)
+    return entropy(hist)
+
+# Funktion zum Berechnen des Variationskoeffizienten
+def calculate_coeff_variation(data):
+    return np.std(data) / np.mean(data)
+
+# Funktion zum Berechnen des Interquartilabstands
+def calculate_iqr(data):
+    return np.percentile(data, 75) - np.percentile(data, 25)
+
+# Funktion zum Berechnen der Schiefe (Skewness)
+def calculate_skewness(data):
+    return np.mean((data - np.mean(data))**3) / (np.std(data)**3)
+
 # Funktion zum Extrahieren von Features aus rohen EEG-Daten
 def extract_features(data, fs):
     features = []
@@ -103,14 +122,17 @@ def extract_features(data, fs):
         std = np.std(channel_data)
         line_length = np.sum(np.abs(np.diff(channel_data)))
         change_rate = np.sum(np.abs(np.diff(channel_data)))
-        
         delta_power = bandpower(channel_data, fs, [0.5, 4])
         theta_power = bandpower(channel_data, fs, [4, 8])
         alpha_power = bandpower(channel_data, fs, [8, 13])
         beta_power = bandpower(channel_data, fs, [13, 30])
+        entropy_val = calculate_entropy(channel_data)
+        coeff_variation = calculate_coeff_variation(channel_data)
+        iqr = calculate_iqr(channel_data)
+        skewness = calculate_skewness(channel_data)
         
-        features.extend([mean, std, line_length, change_rate, delta_power, theta_power, alpha_power, beta_power])
-    max_feature_length = 152  # Ensure the same number of features as during training (19 channels * 8 features)
+        features.extend([mean, std, line_length, change_rate, delta_power, theta_power, alpha_power, beta_power, entropy_val, coeff_variation, iqr, skewness])
+    max_feature_length = 228  # Ensure the same number of features as during training (19 channels * 12 features)
     if len(features) < max_feature_length:
         features = np.pad(features, (0, max_feature_length - len(features)), 'constant')
     return np.array(features)

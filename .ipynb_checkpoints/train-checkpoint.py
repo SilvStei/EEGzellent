@@ -11,6 +11,7 @@ from joblib import Parallel, delayed
 from sklearn.model_selection import StratifiedKFold, train_test_split
 import pandas as pd
 from scipy.signal import welch
+from scipy.stats import entropy
 import psutil
 import time
 
@@ -33,6 +34,24 @@ def bandpower(data, sf, band, window_sec=4, relative=False):
         bp /= np.trapz(psd, freqs)
     return bp
 
+# Funktion zum Berechnen der Entropy
+def calculate_entropy(data):
+    data = np.asarray(data)
+    hist, bin_edges = np.histogram(data, bins=10, density=True)
+    return entropy(hist)
+
+# Funktion zum Berechnen des Variationskoeffizienten
+def calculate_coeff_variation(data):
+    return np.std(data) / np.mean(data)
+
+# Funktion zum Berechnen des Interquartilabstands
+def calculate_iqr(data):
+    return np.percentile(data, 75) - np.percentile(data, 25)
+
+# Funktion zum Berechnen der Schiefe (Skewness)
+def calculate_skewness(data):
+    return np.mean((data - np.mean(data))**3) / (np.std(data)**3)
+
 # Funktion zum Extrahieren von Features aus rohen EEG-Daten
 def extract_features(data, fs):
     features = []
@@ -41,13 +60,16 @@ def extract_features(data, fs):
         std = np.std(channel_data)
         line_length = np.sum(np.abs(np.diff(channel_data)))
         change_rate = calculate_change_rate(channel_data)
-        
         delta_power = bandpower(channel_data, fs, [0.5, 4])
         theta_power = bandpower(channel_data, fs, [4, 8])
         alpha_power = bandpower(channel_data, fs, [8, 13])
         beta_power = bandpower(channel_data, fs, [13, 30])
+        entropy_val = calculate_entropy(channel_data)
+        coeff_variation = calculate_coeff_variation(channel_data)
+        iqr = calculate_iqr(channel_data)
+        skewness = calculate_skewness(channel_data)
         
-        features.extend([mean, std, line_length, change_rate, delta_power, theta_power, alpha_power, beta_power])
+        features.extend([mean, std, line_length, change_rate, delta_power, theta_power, alpha_power, beta_power, entropy_val, coeff_variation, iqr, skewness])
     return np.array(features)
 
 # Funktion zum Verarbeiten eines Batches
@@ -166,7 +188,7 @@ def knn_cv(n_neighbors, weights, algorithm):
     return np.mean(f1_scores)
 
 # Laden der Trainingsdaten
-data_folder = '/home/jupyter-wki_team_2/Silvan/training/training'
+data_folder = '/home/jupyter-wki_team_2/Silvan/training/training_70'
 batch_size = 1000  # Erhöhte Anzahl der Samples pro Batch
 
 # Überprüfen, ob alle Dateien geladen werden
@@ -186,6 +208,11 @@ else:
     # Daten normalisieren
     scaler = StandardScaler().fit(features)
     features = scaler.transform(features)
+
+    # Entfernen von NaN-Werten aus den Features
+    if np.any(np.isnan(features)):
+        print("NaN-Werte in den Features gefunden. Entfernen von NaNs...")
+        features = np.nan_to_num(features)
 
     # Daten in Trainings- und Validierungsset aufteilen
     features_train, features_val, labels_train, labels_val = train_test_split(features, labels, test_size=0.2, random_state=42)
@@ -255,7 +282,7 @@ else:
 
     # Feature Importance für RandomForestClassifier extrahieren und anzeigen
     feature_importances = final_rf.feature_importances_
-    num_features_per_channel = 8  # Anzahl der Features pro Kanal
+    num_features_per_channel = 12  # Anzahl der Features pro Kanal
     num_channels = len(feature_importances) // num_features_per_channel
 
     average_importances = np.zeros(num_features_per_channel)
@@ -269,7 +296,7 @@ else:
     total_importance = np.sum(average_importances)
     normalized_importances = average_importances / total_importance
 
-    feature_names = ['mean', 'std', 'line_length', 'change_rate', 'delta_power', 'theta_power', 'alpha_power', 'beta_power']
+    feature_names = ['mean', 'std', 'line_length', 'change_rate', 'delta_power', 'theta_power', 'alpha_power', 'beta_power', 'entropy', 'coeff_variation', 'iqr', 'skewness']
     for i, importance in enumerate(normalized_importances):
         print(f"Feature: {feature_names[i]}, Normalized Average Importance: {importance}")
 
