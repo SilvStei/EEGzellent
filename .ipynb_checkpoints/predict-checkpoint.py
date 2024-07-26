@@ -3,10 +3,11 @@ import numpy as np
 import joblib
 from typing import List, Dict, Any
 import argparse
-from scipy.ndimage import uniform_filter1d
-from scipy.signal import find_peaks, welch
-from scipy.stats import entropy
 from wettbewerb import EEGDataset
+from scipy.signal import welch
+import psutil
+import time
+import pywt  # Wavelet-Transformation für adaptive Fourier-Dekomposition
 
 # Laden des Modells und des Scalers
 # Basisverzeichnis ermitteln (Verzeichnis des aktuellen Skripts)
@@ -18,76 +19,12 @@ scaler_path = os.path.join(base_dir, 'scaler.joblib')
 model = joblib.load(model_path)
 scaler = joblib.load(scaler_path)
 
-# Funktion zum Berechnen der Hjorth-Parameter
-def hjorth_parameters(data):
-    first_deriv = np.diff(data)
-    second_deriv = np.diff(first_deriv)
-    var_zero = np.var(data)
-    var_d1 = np.var(first_deriv)
-    var_d2 = np.var(second_deriv)
-    
-    if var_zero == 0:
-        var_zero = 1e-10
-    if var_d1 == 0:
-        var_d1 = 1e-10
-    
-    mobility = np.sqrt(var_d1 / var_zero)
-    
-    if var_d2 == 0:
-        var_d2 = 1e-10
-    
-    complexity = np.sqrt(var_d2 / var_d1) / mobility
-    return mobility, complexity
-
-# Funktion zur Berechnung von Onset und Offset basierend auf Hjorth-Mobilität und Energie
-def calculate_onset_offset(data, fs):
-    window_size = fs
-    step_size = fs // 2  # Halb so große Schritte für feinere Analyse
-    hjorth_values = []
-    energy_values = []
-
-    for start in range(0, len(data[0]) - window_size + 1, step_size):
-        window = data[:, start:start + window_size]
-        mobility = np.mean([hjorth_parameters(channel)[0] for channel in window])
-        energy = np.sum(window ** 2)  # Berechnung der Energie des Fensters
-        hjorth_values.append(mobility)
-        energy_values.append(energy)
-
-    hjorth_values = np.array(hjorth_values)
-    energy_values = np.array(energy_values)
-    
-    # Glätten der Energiezeitreihe
-    smoothed_energy = uniform_filter1d(energy_values, size=5)
-
-    # Identifiziere die Changepoints der maximalen Energie
-    energy_diffs = np.diff(smoothed_energy)
-    peaks, _ = find_peaks(energy_diffs, height=np.max(energy_diffs) * 0.5)
-
-    if len(peaks) == 0:
-        peaks = [np.argmax(energy_diffs)]
-
-    changepoint_index = peaks[0]
-
-    # Bestimme das erste Fenster mit hoher Hjorth-Mobilität, das dem Changepoint am nächsten ist
-    high_mobility_indices = np.where(hjorth_values > np.percentile(hjorth_values, 95))[0]
-    
-    if len(high_mobility_indices) == 0:
-        return 0.0, data.shape[1] / fs
-
-    onset_index = high_mobility_indices[np.argmin(np.abs(high_mobility_indices - changepoint_index))]
-    offset_index = high_mobility_indices[-1]
-
-    onset = onset_index * step_size / fs
-    offset = (offset_index + window_size) * step_size / fs
-
-    return onset, offset
-
 # Funktion zum Berechnen der Bandpower
 def bandpower(data, sf, band, window_sec=4, relative=False):
     band = np.asarray(band)
     low, high = band
 
-    freqs, psd = welch(data, sf, nperseg=window_sec*sf)
+    freqs, psd = welch(data, sf, nperseg=window_sec * sf)
 
     idx_band = np.logical_and(freqs >= low, freqs <= high)
     bp = np.trapz(psd[idx_band], freqs[idx_band])
@@ -96,46 +33,61 @@ def bandpower(data, sf, band, window_sec=4, relative=False):
         bp /= np.trapz(psd, freqs)
     return bp
 
-# Funktion zum Berechnen der Entropy
-def calculate_entropy(data):
-    data = np.asarray(data)
-    hist, bin_edges = np.histogram(data, bins=10, density=True)
-    return entropy(hist)
+# Funktion zum Berechnen der Zero-Crossing-Rate
+def zero_crossing_rate(data):
+    zero_crossings = np.sum(np.diff(data > 0))
+    return zero_crossings
 
-# Funktion zum Berechnen des Variationskoeffizienten
-def calculate_coeff_variation(data):
-    return np.std(data) / np.mean(data)
+# Funktion für adaptive Fourier-Dekomposition
+def adaptive_fourier_decomposition(data):
+    coeffs = pywt.wavedec(data, 'db4', level=4)
+    power = np.sum([np.sum(c ** 2) for c in coeffs])
+    return power
 
-# Funktion zum Berechnen des Interquartilabstands
-def calculate_iqr(data):
-    return np.percentile(data, 75) - np.percentile(data, 25)
-
-# Funktion zum Berechnen der Schiefe (Skewness)
-def calculate_skewness(data):
-    return np.mean((data - np.mean(data))**3) / (np.std(data)**3)
+# Funktion zum Berechnen der Hjorth-Mobilität
+def hjorth_mobility(data):
+    diff_signal = np.diff(data)
+    return np.sqrt(np.var(diff_signal) / np.var(data))
 
 # Funktion zum Extrahieren von Features aus rohen EEG-Daten
 def extract_features(data, fs):
     features = []
     for channel_data in data:
-        mean = np.mean(channel_data)
-        std = np.std(channel_data)
         line_length = np.sum(np.abs(np.diff(channel_data)))
-        change_rate = np.sum(np.abs(np.diff(channel_data)))
-        delta_power = bandpower(channel_data, fs, [0.5, 4])
+
         theta_power = bandpower(channel_data, fs, [4, 8])
         alpha_power = bandpower(channel_data, fs, [8, 13])
-        beta_power = bandpower(channel_data, fs, [13, 30])
-        entropy_val = calculate_entropy(channel_data)
-        coeff_variation = calculate_coeff_variation(channel_data)
-        iqr = calculate_iqr(channel_data)
-        skewness = calculate_skewness(channel_data)
-        
-        features.extend([mean, std, line_length, change_rate, delta_power, theta_power, alpha_power, beta_power, entropy_val, coeff_variation, iqr, skewness])
-    max_feature_length = 228  # Ensure the same number of features as during training (19 channels * 12 features)
-    if len(features) < max_feature_length:
-        features = np.pad(features, (0, max_feature_length - len(features)), 'constant')
+        fourier_power = adaptive_fourier_decomposition(channel_data)
+        zero_crossings = zero_crossing_rate(channel_data)
+
+        features.extend([theta_power, alpha_power, fourier_power, zero_crossings, line_length])
+    
     return np.array(features)
+
+# Funktion zur Berechnung von Onset und Offset basierend auf Hjorth-Mobilität
+def calculate_onset_offset(data, fs):
+    window_size = fs
+    step_size = fs
+    hjorth_values = []
+
+    for start in range(0, len(data[0]) - window_size + 1, step_size):
+        window = data[:, start:start + window_size]
+        mobility = np.mean([hjorth_mobility(channel) for channel in window])
+        hjorth_values.append(mobility)
+
+    hjorth_values = np.array(hjorth_values)
+    high_mobility_indices = np.where(hjorth_values > np.percentile(hjorth_values, 95))[0]
+
+    if len(high_mobility_indices) == 0:
+        return 0.0, data.shape[1] / fs
+
+    onset_index = high_mobility_indices[0]
+    offset_index = high_mobility_indices[-1]
+
+    onset = onset_index * step_size / fs
+    offset = (offset_index + window_size) * step_size / fs
+
+    return onset, offset
 
 def predict_labels(channels: List[str], data: np.ndarray, fs: float, reference_system: str, model_name: str='model.json') -> Dict[str, Any]:
     try:
@@ -171,6 +123,10 @@ def predict_labels(channels: List[str], data: np.ndarray, fs: float, reference_s
         return {"seizure_present": 0, "seizure_confidence": 0.0, "onset": 0.0, "onset_confidence": 0.0, "offset": 0.0, "offset_confidence": 0.0}
 
 def main(test_dir: str):
+    # Startzeit und Prozessinformationen erfassen
+    start_time = time.time()
+    process = psutil.Process(os.getpid())
+
     # Laden des Testdatensatzes
     dataset = EEGDataset(test_dir)
     predictions = []
@@ -189,6 +145,15 @@ def main(test_dir: str):
             f.write(f"{pred['id']},{pred['seizure_present']},{pred['seizure_confidence']},{pred['onset']},{pred['onset_confidence']},{pred['offset']},{pred['offset_confidence']}\n")
     
     print(f"Vorhersagen wurden in {prediction_file} gespeichert.")
+    
+    # Endzeit und Prozessinformationen erfassen
+    end_time = time.time()
+    memory_usage = process.memory_info().rss / (1024 ** 2)  # In MB
+    cpu_usage = psutil.cpu_percent(interval=None)
+    
+    print(f"RAM-Verbrauch: {memory_usage:.2f} MB")
+    print(f"CPU-Auslastung: {cpu_usage:.2f}%")
+    print(f"Laufzeit: {end_time - start_time:.2f} Sekunden")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Make predictions on EEG test data")
