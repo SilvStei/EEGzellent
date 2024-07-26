@@ -5,3 +5,4 @@ scikit-learn
 bayesian-optimization
 pandas
 PyWavelets
+psutil
